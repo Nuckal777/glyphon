@@ -25,6 +25,13 @@ pub struct TextRenderer {
     screen_resolution: Resolution,
 }
 
+struct UploadBounds {
+    x_min: usize,
+    x_max: usize,
+    y_min: usize,
+    y_max: usize,
+}
+
 impl TextRenderer {
     /// Creates a new `TextRenderer`.
     pub fn new(device: &Device, _queue: &Queue) -> Self {
@@ -81,13 +88,6 @@ impl TextRenderer {
                 )
             });
         }
-
-        struct UploadBounds {
-            x_min: usize,
-            x_max: usize,
-            y_min: usize,
-            y_max: usize,
-        }
         let mut upload_bounds = None::<UploadBounds>;
 
         self.glyphs_in_use.clear();
@@ -107,9 +107,12 @@ impl TextRenderer {
 
                 let (gpu_cache, atlas_id) = if glyph.char_data.rasterize() {
                     // Find a position in the packer
-                    let allocation = match try_allocate(atlas, metrics.width, metrics.height) {
+                    let allocation = match try_allocate(atlas, device, metrics.width, metrics.height) {
                         Some(a) => a,
-                        None => return Err(PrepareError::AtlasFull),
+                        // resize happened => prepare again
+                        None => {
+                            return self.prepare(device, queue, atlas, screen_resolution, fonts, layouts);
+                        },
                     };
                     let atlas_min = allocation.rectangle.min;
                     let atlas_max = allocation.rectangle.max;
@@ -382,21 +385,29 @@ impl TextRenderer {
     }
 }
 
-fn try_allocate(atlas: &mut TextAtlas, width: usize, height: usize) -> Option<Allocation> {
+fn try_allocate(atlas: &mut TextAtlas, device: &Device, width: usize, height: usize) -> Option<Allocation> {
     let size = size2(width as i32, height as i32);
+    let allocation = atlas.packer.allocate(size);
+    if allocation.is_some() {
+        return allocation;
+    }
+    let resized = atlas.resize(device);
+    if resized {
+        return None;
+    }
 
     loop {
-        let allocation = atlas.packer.allocate(size);
-        if allocation.is_some() {
-            return allocation;
-        }
-
         // Try to free least recently used allocation
         let (key, value) = atlas.glyph_cache.pop()?;
         atlas
             .packer
             .deallocate(value.atlas_id.expect("cache corrupt"));
         atlas.glyph_cache.remove(&key);
+
+        let allocation = atlas.packer.allocate(size);
+        if allocation.is_some() {
+            return allocation;
+        }
     }
 }
 

@@ -68,7 +68,7 @@ async fn run() {
     };
     surface.configure(&device, &config);
 
-    let mut atlas = TextAtlas::new(&device, &queue, swapchain_format);
+    let mut atlas = TextAtlas::new(&device, &queue, swapchain_format, 128);
     let mut text_renderer = TextRenderer::new(&device, &queue);
 
     let font = include_bytes!("./Inter-Bold.ttf") as &[u8];

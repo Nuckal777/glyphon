@@ -2,13 +2,13 @@ use etagere::{size2, BucketedAtlasAllocator};
 use fontdue::layout::GlyphRasterConfig;
 use std::{borrow::Cow, mem::size_of, num::NonZeroU64, sync::Arc};
 use wgpu::{
-    BindGroup, BindGroupEntry, BindGroupLayoutEntry, BindingResource, BindingType, BlendState,
-    Buffer, BufferBindingType, BufferDescriptor, BufferUsages, ColorTargetState, ColorWrites,
-    Device, Extent3d, FilterMode, FragmentState, MultisampleState, PipelineLayoutDescriptor,
-    PrimitiveState, Queue, RenderPipeline, RenderPipelineDescriptor, SamplerBindingType,
-    SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages, Texture,
-    TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
-    TextureViewDescriptor, TextureViewDimension, VertexFormat, VertexState,
+    BindGroup, BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingResource, BindingType,
+    BlendState, Buffer, BufferBindingType, BufferDescriptor, BufferUsages, ColorTargetState,
+    ColorWrites, Device, Extent3d, FilterMode, FragmentState, MultisampleState,
+    PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPipeline, RenderPipelineDescriptor,
+    Sampler, SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource,
+    ShaderStages, Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType,
+    TextureUsages, TextureViewDescriptor, TextureViewDimension, VertexFormat, VertexState,
 };
 
 use crate::{GlyphDetails, GlyphToRender, Params, RecentlyUsedMap, Resolution};
@@ -24,15 +24,16 @@ pub struct TextAtlas {
     pub(crate) params: Params,
     pub(crate) params_buffer: Buffer,
     pub(crate) pipeline: Arc<RenderPipeline>,
+    pub(crate) bind_group_layout: BindGroupLayout,
     pub(crate) bind_group: Arc<BindGroup>,
+    pub(crate) sampler: Sampler,
 }
 
 impl TextAtlas {
     /// Creates a new `TextAtlas`.
-    pub fn new(device: &Device, _queue: &Queue, format: TextureFormat) -> Self {
-        let max_texture_dimension_2d = device.limits().max_texture_dimension_2d;
-        let width = max_texture_dimension_2d;
-        let height = max_texture_dimension_2d;
+    pub fn new(device: &Device, _queue: &Queue, format: TextureFormat, dimension: u32) -> Self {
+        let width = dimension;
+        let height = dimension;
 
         let packer = BucketedAtlasAllocator::new(size2(width as i32, height as i32));
         // Create a texture to use for our atlas
@@ -205,7 +206,64 @@ impl TextAtlas {
             params,
             params_buffer,
             pipeline,
+            bind_group_layout,
             bind_group,
+            sampler,
         }
+    }
+
+    // Will allocated a new texture with double the size of the previous one and drop
+    // drop the glyph_cache and packer, if possible.
+    // Returns true if a resize and cache and packer drop happened.
+    pub fn resize(&mut self, device: &Device) -> bool {
+        let enlarge_width = device.limits().max_texture_dimension_2d.min(self.width * 2);
+        let enlarge_height = device
+            .limits()
+            .max_texture_dimension_2d
+            .min(self.height * 2);
+        if enlarge_width == self.width && enlarge_height == self.height {
+            return false;
+        }
+        let enlarge_texture = device.create_texture(&TextureDescriptor {
+            label: Some("glyphon atlas"),
+            size: Extent3d {
+                width: enlarge_width,
+                height: enlarge_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::R8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+        });
+        self.glyph_cache = RecentlyUsedMap::new();
+        self.packer =
+            BucketedAtlasAllocator::new(size2(enlarge_width as i32, enlarge_height as i32));
+        self.texture_pending = vec![0; (enlarge_width * enlarge_height) as usize];
+
+        let texture_view = enlarge_texture.create_view(&TextureViewDescriptor::default());
+        self.bind_group = Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&texture_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::Sampler(&self.sampler),
+                },
+            ],
+            label: Some("glyphon bind group"),
+        }));
+        self.texture = enlarge_texture;
+        self.width = enlarge_width;
+        self.height = enlarge_height;
+        true
     }
 }

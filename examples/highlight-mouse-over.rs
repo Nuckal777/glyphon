@@ -70,7 +70,7 @@ async fn run() {
     let min_y = 100f32;
     let height = 250f32;
 
-    let mut atlas = TextAtlas::new(&device, &queue, swapchain_format);
+    let mut atlas = TextAtlas::new(&device, &queue, swapchain_format, 128);
     let mut text_renderer = TextRenderer::new(&device, &queue);
 
     let font = include_bytes!("./Inter-Bold.ttf") as &[u8];
